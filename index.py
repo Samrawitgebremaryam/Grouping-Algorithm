@@ -147,6 +147,49 @@ def group_graph(result_graph: Graph, request: Dict) -> Graph:
                 for prop in relevant_properties:
                     if prop in node.data:
                         node_data[prop] = node.data[prop]
+
+                # Set label to "gene"
+                node_data["label"] = "gene"
+
+            elif node_type == "transcript":
+                # Add specific handling for transcript nodes
+                relevant_properties = [
+                    "transcript_id",
+                    "transcript_type",
+                    "transcript_name",
+                    "start",
+                    "end",
+                    "chr",
+                    "gene_name",  # Keep gene_name in properties
+                ]
+                for prop in relevant_properties:
+                    if prop in node.data:
+                        node_data[prop] = node.data[prop]
+
+                # If gene_name is not in transcript data, try to get it from the connected gene node
+                if "gene_name" not in node_data:
+                    for edge in result_graph.edges:
+                        if edge.data[
+                            "target"
+                        ] == f"{node_type} {node.data['id']}" and edge.data[
+                            "source"
+                        ].startswith(
+                            "gene "
+                        ):
+                            # Find the connected gene node
+                            gene_id = edge.data["source"].replace("gene ", "")
+                            for gene_node in result_graph.nodes:
+                                if (
+                                    gene_node.data["type"] == "gene"
+                                    and gene_node.data["id"] == gene_id
+                                    and "gene_name" in gene_node.data
+                                ):
+                                    node_data["gene_name"] = gene_node.data["gene_name"]
+                                    break
+                            break
+
+                # Set label to "transcript"
+                node_data["label"] = "transcript"
             else:
                 # For other node types, copy all properties except id, type, name
                 for key, value in node.data.items():
@@ -181,12 +224,27 @@ def group_graph(result_graph: Graph, request: Dict) -> Graph:
 
 
 if __name__ == "__main__":
-    # Create graph instance
-    input_graph = Graph.from_dict(oldGraph)
+    # Create a sample graph for testing
+    sample_graph = {
+        "nodes": [
+            {"data": {"id": "1", "type": "gene", "name": "Gene 1"}},
+            {"data": {"id": "2", "type": "protein", "name": "Protein 1"}},
+        ],
+        "edges": [
+            {
+                "data": {
+                    "edge_id": "interacts_1_2",
+                    "label": "interacts",
+                    "source": "gene 1",
+                    "target": "protein 2",
+                    "id": "e1",
+                }
+            }
+        ],
+    }
 
-    # Process the graph
-    grouped_graph = group_graph(input_graph, request)
-
-    # Print results
-    print(json.dumps(grouped_graph.to_dict(), indent=2))
-
+    # Test the Graph class
+    input_graph = Graph.from_dict(sample_graph)
+    print("Graph created successfully")
+    print(f"Number of nodes: {len(input_graph.nodes)}")
+    print(f"Number of edges: {len(input_graph.edges)}")

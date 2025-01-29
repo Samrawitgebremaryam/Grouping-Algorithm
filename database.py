@@ -45,7 +45,6 @@ class Neo4jConnection:
         while retry_count < self.max_retries:
             try:
                 with self.driver.session() as session:
-                    print("Executing Neo4j query...")
                     query = """
                     MATCH (n)
                     OPTIONAL MATCH (n)-[r]->(m)
@@ -53,19 +52,13 @@ class Neo4jConnection:
                          collect(distinct {rel: r, start: n, end: m}) as relationships
                     RETURN nodes, relationships
                     """
-                    print(f"Query: {query}")
 
                     result = session.run(query)
-                    print("\nQuery executed successfully")
 
                     record = result.single()
                     if not record:
-                        print("No data found in database")
                         return {"nodes": [], "edges": []}
 
-                    print(
-                        f"\nFound {len(record['nodes'])} nodes and {len(record['relationships'])} relationships"
-                    )
 
                     nodes = []
                     edges = []
