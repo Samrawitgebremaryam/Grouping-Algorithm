@@ -165,10 +165,10 @@ class Neo4jConnection:
                         edges.append(
                             {
                                 "data": {
-                                    "edge_id": f"gene_transcribed_to_transcript",
+                                    "edge_id": f"{start_node.get('type', 'unknown')}_{rel.type.lower()}_{end_node.get('type', 'unknown')}",
                                     "label": rel.type.lower(),
-                                    "source": f"gene {start_id}",
-                                    "target": f"transcript {end_id}",
+                                    "source": f"{start_node.get('type', 'unknown')} {start_id}",
+                                    "target": f"{end_node.get('type', 'unknown')} {end_id}",
                                     "id": f"e{nanoid.generate(size=10)}",
                                 }
                             }

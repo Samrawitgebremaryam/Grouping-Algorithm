@@ -416,7 +416,7 @@ def group_graph(result_graph: Graph, request: Dict) -> Graph:
                     "label": grouping["edge_type"],
                     "source": edges[0].data[
                         "source"
-                    ],  # Always use the original gene source
+                    ],  
                     "target": parent_id,  # Always point to parent node
                 }
             )
