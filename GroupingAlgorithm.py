@@ -3,9 +3,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 from neo4j import GraphDatabase
 import nanoid
-import os
 
-# Constants
 MINIMUM_EDGES_TO_COLLAPSE = 2
 
 @dataclass
@@ -46,62 +44,42 @@ class Neo4jConnection:
     def get_graph_data(self, request_data: Dict, limit: int = 1000) -> Dict[str, Any]:
         try:
             with self.driver.session() as session:
-                # Get available labels (node types)
-                label_query = """
-                CALL db.labels() YIELD label 
-                RETURN collect(toLower(label)) as labels
-                """
-                labels_result = session.run(label_query).single()
-                available_labels = labels_result["labels"] if labels_result else []
-                print(f"Available labels: {available_labels}")
-
-                # Get available relationship types
-                rel_query = """
-                CALL db.relationshipTypes() YIELD relationshipType
-                RETURN collect(toLower(relationshipType)) as types
-                """
-                rel_result = session.run(rel_query).single()
-                available_rels = rel_result["types"] if rel_result else []
-                print(f"Available relationships: {available_rels}")
-
-                # Build dynamic query based on node types and relationships in request data
+                # Build the query based on the request
                 query_parts = []
                 parameters = {}
 
+                # Process nodes
                 for node in request_data.get("nodes", []):
                     node_type = node.get("type", "").lower()
-                    if node_type not in available_labels:
-                        raise ValueError(f"Node type '{node_type}' is not available in the database")
-
+                    node_id = node.get("node_id")
                     properties = node.get("properties", {})
+
+                    # Add node match clause
                     node_conditions = []
                     for prop, value in properties.items():
-                        param_key = f"{node_type}_{prop}"
+                        param_key = f"{node_id}_{prop}"
                         parameters[param_key] = value
-                        node_conditions.append(f"toLower(n.{prop}) = toLower(${param_key})")
-                    
+                        node_conditions.append(f"toLower({node_id}.{prop}) = toLower(${param_key})")
+
+                    match_clause = f"MATCH ({node_id}:{node_type})"
                     if node_conditions:
-                        query_parts.append(f"(n:{node_type}) WHERE " + " AND ".join(node_conditions))
-                    else:
-                        query_parts.append(f"(n:{node_type})")
+                        match_clause += f" WHERE {' AND '.join(node_conditions)}"
+                    query_parts.append(match_clause)
 
-                # Handle relationships in request data
-                rel_query_parts = []
+                # Process relationships
                 for predicate in request_data.get("predicates", []):
-                    rel_type = predicate.get("type", "").lower()
-                    if rel_type not in available_rels:
-                        raise ValueError(f"Relationship type '{rel_type}' is not available in the database")
-
                     source = predicate.get("source")
                     target = predicate.get("target")
-                    rel_query_parts.append(f"({source})-[r:{rel_type}]->({target})")
+                    rel_type = predicate.get("type")
+                    query_parts.append(f"MATCH ({source})-[r:{rel_type}]->({target})")
 
-                # Construct the final query
-                query = "MATCH " + ", ".join(query_parts + rel_query_parts)
-                query += " RETURN collect(distinct n) as nodes, collect(distinct r) as relationships LIMIT $limit"
+                # Combine query parts
+                query = " ".join(query_parts)
+                query += " RETURN collect(distinct n1) + collect(distinct n2) as nodes, collect(distinct r) as relationships"
+                query += " LIMIT $limit"
 
-                # Run the query
-                result = session.run(query, **parameters, limit=limit)
+                # Execute query
+                result = session.run(query, parameters={**parameters, "limit": limit})
                 record = result.single()
 
                 if not record:
@@ -113,28 +91,55 @@ class Neo4jConnection:
                 # Process nodes
                 for node in record["nodes"]:
                     node_properties = dict(node.items())
-                    node_id = node_properties.get("id", str(node.id))
-                    node_type = node_properties.get("label", "unknown")
+                    node_type = list(node.labels)[0].lower()
+                    raw_node_id = node_properties.get("id", str(node.id))
+                    
+                    # Create formatted node data with node_type in id
+                    formatted_data = {
+                        "id": f"{node_type} {raw_node_id}",  
+                        "type": node_type,
+                        "label": node_type,
+                        "name": f"{node_type} {raw_node_id}"
+                    }
 
-                    nodes.append({
-                        "data": {
-                            "id": node_id,
-                            "type": node_type,
-                            **node_properties  # Include all node properties dynamically
-                        }
-                    })
+                    # Add all properties from Neo4j node
+                    for key, value in node_properties.items():
+                        # Skip synonyms field
+                        if key == "synonyms":
+                            continue
+                        elif isinstance(value, (int, float)):
+                            formatted_data[key] = str(value)
+                        else:
+                            formatted_data[key] = value
+
+                    # Add gene_name to transcript nodes
+                    if node_type == "transcript" and "gene_name" not in formatted_data:
+                        # Find the gene node and get its gene_name
+                        for gene_node in record["nodes"]:
+                            if "gene" in gene_node.labels:
+                                formatted_data["gene_name"] = dict(gene_node.items()).get("gene_name")
+                                break
+
+                    nodes.append({"data": formatted_data})
 
                 # Process relationships
                 for rel in record["relationships"]:
-                    start_id = rel.start_node.id
-                    end_id = rel.end_node.id
+                    start_node_type = list(rel.start_node.labels)[0].lower()
+                    end_node_type = list(rel.end_node.labels)[0].lower()
+                    
+                    start_node_id = rel.start_node.get("id", str(rel.start_node.id))
+                    end_node_id = rel.end_node.get("id", str(rel.end_node.id))
+                    
+                    start_id = f"{start_node_type} {start_node_id}"
+                    end_id = f"{end_node_type} {end_node_id}"
 
                     edges.append({
                         "data": {
                             "id": f"e{nanoid.generate(size=10)}",
-                            "label": rel.type,
+                            "edge_id": f"{start_node_type}_{rel.type.lower()}_{end_node_type}",
+                            "label": rel.type.lower(),
                             "source": start_id,
-                            "target": end_id,
+                            "target": end_id
                         }
                     })
 
@@ -190,11 +195,75 @@ def group_graph(result_graph: Graph, request: Dict) -> Graph:
     """Group nodes and edges based on request data"""
     new_graph = Graph(nodes=[], edges=[])
     
-    # Group nodes and edges as per the request
-    for node in result_graph.nodes:
-        new_graph.nodes.append(node)
+    # Get source and target types from request predicates
+    predicates = request.get("predicates", [])
+    if not predicates:
+        return result_graph
+        
+    source_type = None
+    target_type = None
+    relationship_type = None
+    
+    for predicate in predicates:
+        # Get node types from request nodes
+        for node in request.get("nodes", []):
+            if node.get("node_id") == predicate.get("source"):
+                source_type = node.get("type", "").lower()
+            elif node.get("node_id") == predicate.get("target"):
+                target_type = node.get("type", "").lower()
+        relationship_type = predicate.get("type", "").lower()
+        break  # Use first predicate for grouping
+    
+    if not (source_type and target_type and relationship_type):
+        return result_graph
+    
+    # Get source and target nodes
+    source_nodes = [node for node in result_graph.nodes if node.data["type"] == source_type]
+    target_nodes = [node for node in result_graph.nodes if node.data["type"] == target_type]
+    
+    if len(target_nodes) >= MINIMUM_EDGES_TO_COLLAPSE:
+        # Create parent node with nanoid
+        parent_id = nanoid.generate(size=10)
+        parent_node = Node(data={
+            "id": parent_id,  
+            "type": "parent",
+            "name": f"{len(target_nodes)} {target_type} nodes"
+        })
 
-    for edge in result_graph.edges:
-        new_graph.edges.append(edge)
+        # Add parent node first
+        new_graph.nodes.append(parent_node)
 
+        # Add source nodes (ensuring they have node type in ID)
+        for source_node in source_nodes:
+            source_data = source_node.data.copy()
+            if not source_data["id"].startswith(f"{source_type} "):
+                source_data["id"] = f"{source_type} {source_data['id']}"
+            new_graph.nodes.append(Node(data=source_data))
+
+        # Add target nodes with parent reference
+        for node in target_nodes:
+            node_data = node.data.copy()
+            if not node_data["id"].startswith(f"{target_type} "):
+                node_data["id"] = f"{target_type} {node_data['id']}"
+            node_data["parent"] = parent_id
+            new_graph.nodes.append(Node(data=node_data))
+
+        # Create single edge from source to parent
+        if source_nodes:
+            source_node = source_nodes[0].data
+            source_id = source_node["id"]
+            if not source_id.startswith(f"{source_type} "):
+                source_id = f"{source_type} {source_id}"
+            
+            new_edge = Edge(data={
+                "id": f"e{nanoid.generate(size=10)}",
+                "edge_id": f"{source_type}_{relationship_type}_{target_type}",
+                "label": relationship_type,
+                "source": source_id,
+                "target": parent_id
+            })
+            new_graph.edges = [new_edge]
+    else:
+        return result_graph
+    
     return new_graph
