@@ -7,6 +7,9 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from functools import lru_cache
 
+# Constants
+MINIMUM_EDGES_TO_COLLAPSE = 2
+
 
 @dataclass
 class Edge:
@@ -303,57 +306,55 @@ def create_node_groups(
     }
 
 
-def group_edges(result_graph: Graph, request: Dict) -> Dict:
-    """Group edges by edge_id only since it encodes source type, target type, and relationship"""
-    MINIMUM_EDGES_TO_COLLAPSE = 2
+def group_edges(result_graph: Graph, request: Dict) -> List[Dict]:
+    """Group edges by edge_id and handle any node types"""
+    edge_groups = defaultdict(list)
 
-    # Group edges by edge_id
-    edge_groups = {}
+    # Group by edge_id which contains source and target types
     for edge in result_graph.edges:
         edge_id = edge.data.get("edge_id")
-        if edge_id not in edge_groups:
-            edge_groups[edge_id] = []
-        edge_groups[edge_id].append(edge)
+        if edge_id:  # Format: source_type_relationship_target_type
+            edge_groups[edge_id].append(edge)
 
+    # Process groups regardless of node types
     edge_groupings = []
     for edge_id, edges in edge_groups.items():
-        if len(edges) < MINIMUM_EDGES_TO_COLLAPSE:
-            continue
+        if len(edges) >= MINIMUM_EDGES_TO_COLLAPSE:
+            source_type, relationship, target_type = edge_id.split("_", 2)
 
-        # For each edge_id, try grouping by source and target
-        source_groups = {}
-        target_groups = {}
+            # For each edge_id, try grouping by source and target
+            source_groups = {}
+            target_groups = {}
 
-        for edge in edges:
-            source = edge.data.get("source")
-            target = edge.data.get("target")
+            for edge in edges:
+                source = edge.data.get("source")
+                target = edge.data.get("target")
 
-            if source not in source_groups:
-                source_groups[source] = []
-            if target not in target_groups:
-                target_groups[target] = []
+                if source not in source_groups:
+                    source_groups[source] = []
+                if target not in target_groups:
+                    target_groups[target] = []
 
-            source_groups[source].append(edge)
-            target_groups[target].append(edge)
+                source_groups[source].append(edge)
+                target_groups[target].append(edge)
 
-        # Choose optimal grouping strategy
-        grouped_by = "target" if len(source_groups) > len(target_groups) else "source"
-        groups = target_groups if grouped_by == "target" else source_groups
+            # Choose optimal grouping strategy
+            grouped_by = (
+                "target" if len(source_groups) > len(target_groups) else "source"
+            )
+            groups = target_groups if grouped_by == "target" else source_groups
 
-        edge_groupings.append(
-            {
-                "count": len(edges),
-                "edge_id": edge_id,
-                "edge_type": edges[0].data.get("label"),
-                "grouped_by": grouped_by,
-                "groups": groups,
-            }
-        )
+            edge_groupings.append(
+                {
+                    "count": len(edges),
+                    "edge_id": edge_id,
+                    "edge_type": edges[0].data.get("label"),
+                    "grouped_by": grouped_by,
+                    "groups": groups,
+                }
+            )
 
-    # Sort groupings by complexity reduction potential
-    return sorted(
-        edge_groupings, key=lambda x: x["count"] - len(x["groups"]), reverse=True
-    )
+    return edge_groupings
 
 
 def group_graph(result_graph: Graph, request: Dict) -> Graph:
