@@ -3,10 +3,15 @@ from neo4j import GraphDatabase
 from dataclasses import dataclass
 from typing import Dict, List, Any
 import json
+import os
+from dotenv import load_dotenv
 
-# Import your existing classes and functions
+# Import existing classes and functions
 from index import Graph, Node, Edge, group_graph, count_nodes_by_type
 from database import Neo4jConnection
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -18,12 +23,12 @@ def process_graph():
         request_json = request.json
         print("Full request data:", json.dumps(request_json, indent=2))
 
-        # Initialize Neo4j connection
+        # Initialize Neo4j connection 
         neo4j_conn = Neo4jConnection(
-            uri="neo4j+s://cb5ba820.databases.neo4j.io",
-            user="neo4j",
-            password="EiegSoXk1JX8vviqSOPpf9czT_lmX9mixd_b9rn0VrQ",
-            max_retries=3,
+            uri=os.getenv("NEO4J_URI"),
+            user=os.getenv("NEO4J_USER"),
+            password=os.getenv("NEO4J_PASSWORD"),
+            max_retries=int(os.getenv("NEO4J_MAX_RETRIES", 3)),
         )
 
         # Get request data and pagination parameters

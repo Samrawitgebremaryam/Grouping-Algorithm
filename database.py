@@ -43,7 +43,7 @@ class Neo4jConnection:
     def get_graph_data(self, request_data: Dict, limit: int = 1000) -> Dict[str, Any]:
         try:
             with self.driver.session() as session:
-                # First, let's check what labels exist in the database
+                #  checking what labels exist in the database
                 label_query = """
                 CALL db.labels() YIELD label 
                 RETURN collect(toLower(label)) as labels

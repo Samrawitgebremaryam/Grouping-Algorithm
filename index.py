@@ -246,6 +246,7 @@ def create_edges(
                 source_type,
                 target_type,
                 relationship_type,
+                edge_id,
                 parent_ids,
                 seen_edges,
             )
@@ -260,6 +261,7 @@ def create_edges_for_source_nodes(
     source_type: str,
     target_type: str,
     relationship_type: str,
+    edge_id: str,
     parent_ids: Dict,
     seen_edges: Set,
 ) -> List[Edge]:
@@ -272,7 +274,7 @@ def create_edges_for_source_nodes(
     edges = []
     edge_data_list = [
         {
-            "edge_id": f"{source_type}_{relationship_type}_{target_type}",
+            "edge_id": edge_id,
             "label": relationship_type,
             "source": source_node.data["id"],
             "target": parent_id,
@@ -301,47 +303,125 @@ def create_node_groups(
     }
 
 
+def group_edges(result_graph: Graph, request: Dict) -> Dict:
+    """Group edges by edge_id only since it encodes source type, target type, and relationship"""
+    MINIMUM_EDGES_TO_COLLAPSE = 2
+
+    # Group edges by edge_id
+    edge_groups = {}
+    for edge in result_graph.edges:
+        edge_id = edge.data.get("edge_id")
+        if edge_id not in edge_groups:
+            edge_groups[edge_id] = []
+        edge_groups[edge_id].append(edge)
+
+    edge_groupings = []
+    for edge_id, edges in edge_groups.items():
+        if len(edges) < MINIMUM_EDGES_TO_COLLAPSE:
+            continue
+
+        # For each edge_id, try grouping by source and target
+        source_groups = {}
+        target_groups = {}
+
+        for edge in edges:
+            source = edge.data.get("source")
+            target = edge.data.get("target")
+
+            if source not in source_groups:
+                source_groups[source] = []
+            if target not in target_groups:
+                target_groups[target] = []
+
+            source_groups[source].append(edge)
+            target_groups[target].append(edge)
+
+        # Choose optimal grouping strategy
+        grouped_by = "target" if len(source_groups) > len(target_groups) else "source"
+        groups = target_groups if grouped_by == "target" else source_groups
+
+        edge_groupings.append(
+            {
+                "count": len(edges),
+                "edge_id": edge_id,
+                "edge_type": edges[0].data.get("label"),
+                "grouped_by": grouped_by,
+                "groups": groups,
+            }
+        )
+
+    # Sort groupings by complexity reduction potential
+    return sorted(
+        edge_groupings, key=lambda x: x["count"] - len(x["groups"]), reverse=True
+    )
+
+
 def group_graph(result_graph: Graph, request: Dict) -> Graph:
     """Main function to group nodes and create the graph"""
-    request_data = request.get("nodes", [])
-    predicates = request.get("predicates", [])
+    # Get edge groupings first
+    edge_groupings = group_edges(result_graph, request)
 
-    # Create mappings and find matching nodes
-    node_properties, node_id_mapping = create_node_mappings(request_data)
-    nodes_by_type = find_matching_nodes(result_graph, node_properties)
+    # Create new graph starting with parent nodes
+    new_graph = Graph(nodes=[], edges=[])
 
-    # Create node groups and patterns
-    node_groups = create_node_groups(nodes_by_type)
+    # Process each edge grouping
+    for grouping in edge_groupings:
+        for key, edges in grouping["groups"].items():
+            if len(edges) < 2:  # MINIMUM_EDGES_TO_COLLAPSE
+                continue
 
-    # Create parent nodes and process all nodes
-    modified_nodes, parent_ids = create_parent_nodes(node_groups)
+            # Get nodes to be grouped
+            child_node_ids = [
+                (
+                    e.data["source"]
+                    if grouping["grouped_by"] == "target"
+                    else e.data["target"]
+                )
+                for e in edges
+            ]
 
-    # Process individual nodes
-    for node_type, nodes in nodes_by_type.items():
-        for node in nodes:
-            node_data = process_node_properties(node, node_type)
-            if node_type == "transcript":
-                node_data = get_gene_name_for_transcript(node_data, node, result_graph)
+            # Create parent node
+            parent_id = f"n{nanoid.generate(size=10)}"
+            node_type = (
+                grouping["edge_id"].split("_")[0]  # source type
+                if grouping["grouped_by"] == "target"
+                else grouping["edge_id"].split("_")[-1]  # target type
+            )
 
-            # Add parent reference
-            for (t, pattern), parent_id in parent_ids.items():
-                if t == node_type:
-                    node_data["parent"] = parent_id
-                    break
+            # Add parent node first
+            parent_node = Node(
+                data={
+                    "id": parent_id,
+                    "type": "parent",
+                    "name": f"{len(child_node_ids)} {node_type} nodes",
+                }
+            )
+            new_graph.nodes.append(parent_node)
 
-            modified_nodes.append(Node(data=node_data))
+            # Add all other nodes
+            for node in result_graph.nodes:
+                if node.data["id"] in child_node_ids:
+                    # Add parent reference to child nodes
+                    new_node = Node(data={**node.data, "parent": parent_id})
+                    new_graph.nodes.append(new_node)
+                else:
+                    new_graph.nodes.append(node)
 
-    # Create edges
-    new_edges = create_edges(nodes_by_type, predicates, node_id_mapping, parent_ids)
+            # Create single edge from gene to parent
+            new_edge = Edge(
+                data={
+                    "id": f"e{nanoid.generate(size=10)}",
+                    "edge_id": grouping["edge_id"],
+                    "label": grouping["edge_type"],
+                    "source": edges[0].data[
+                        "source"
+                    ],  # Always use the original gene source
+                    "target": parent_id,  # Always point to parent node
+                }
+            )
+            new_graph.edges = [new_edge]  # Replace all edges with single new edge
 
-    # Create final graph
-    final_graph = Graph(nodes=modified_nodes, edges=new_edges)
-
-    # Add counts
-    graph_dict = final_graph.to_dict()
-    graph_dict.update(count_nodes_and_edges(nodes_by_type, defaultdict(list)))
-
-    return Graph.from_dict(graph_dict)
+    return new_graph
 
 
 @lru_cache(maxsize=1000)
