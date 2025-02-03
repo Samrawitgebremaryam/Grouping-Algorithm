@@ -428,3 +428,4 @@ def group_graph(result_graph: Graph, request: Dict) -> Graph:
 @lru_cache(maxsize=1000)
 def get_edge_id(source_type: str, relationship_type: str, target_type: str) -> str:
     return f"{source_type}_{relationship_type}_{target_type}"
+
