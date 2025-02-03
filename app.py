@@ -1,20 +1,19 @@
 from flask import Flask, request, jsonify, stream_with_context, Response
-from neo4j import GraphDatabase
-from dataclasses import dataclass
-from typing import Dict, List, Any
+from dotenv import load_dotenv
 import json
 import os
-from dotenv import load_dotenv
 
-# Import existing classes and functions
-from index import Graph, Node, Edge, group_graph, count_nodes_by_type
-from database import Neo4jConnection
+# Import from combined GroupingAlgorithm.py
+from GroupingAlgorithm import (
+    Graph,
+    Neo4jConnection,
+    group_graph
+)
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
-
 
 @app.route("/api/graph", methods=["POST"])
 def process_graph():
@@ -23,7 +22,7 @@ def process_graph():
         request_json = request.json
         print("Full request data:", json.dumps(request_json, indent=2))
 
-        # Initialize Neo4j connection 
+        # Initialize Neo4j connection from GroupingAlgorithm
         neo4j_conn = Neo4jConnection(
             uri=os.getenv("NEO4J_URI"),
             user=os.getenv("NEO4J_USER"),
@@ -41,7 +40,7 @@ def process_graph():
         if not request_data:
             return jsonify({"error": "No requests data provided"}), 400
 
-        # Get data from Neo4j with limit - Pass request_data here
+        # Get data from Neo4j with limit
         graph_data = neo4j_conn.get_graph_data(request_data=request_data, limit=limit)
         print(f"Raw graph data from Neo4j: {json.dumps(graph_data, indent=2)}")
 
@@ -78,12 +77,10 @@ def process_graph():
 
     except Exception as e:
         import traceback
-
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
     finally:
         if neo4j_conn:
             neo4j_conn.close()
 
-
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
